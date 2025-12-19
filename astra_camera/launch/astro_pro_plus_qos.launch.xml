@@ -1,0 +1,107 @@
+<launch>
+    <!-- Camera basic configuration -->
+    <arg name="camera_name" default="camera"/>
+    <arg name="depth_registration" default="false"/>
+    <arg name="serial_number" default=""/>
+    <arg name="device_num" default="1"/>
+    <arg name="vendor_id" default="0x2bc5"/>
+    <arg name="product_id" default=""/>
+    
+    <!-- QoS configuration -->
+    <arg name="qos_profile" default="default" 
+         description="QoS profile: default, sensor_data, best_effort, reliable"/>
+    
+    <!-- GPU acceleration configuration -->
+    <arg name="enable_point_cloud" default="true"/>
+    <arg name="enable_gpu_point_cloud" default="true"/>
+    <arg name="enable_colored_point_cloud" default="false"/>
+    
+    <!-- Image configuration -->
+    <arg name="color_width" default="640"/>
+    <arg name="color_height" default="480"/>
+    <arg name="color_fps" default="30"/>
+    <arg name="enable_color" default="true"/>
+    <arg name="flip_color" default="false"/>
+    
+    <arg name="depth_width" default="320"/>
+    <arg name="depth_height" default="240"/>
+    <arg name="depth_fps" default="30"/>
+    <arg name="enable_depth" default="true"/>
+    <arg name="flip_depth" default="false"/>
+    
+    <arg name="ir_width" default="640"/>
+    <arg name="ir_height" default="480"/>
+    <arg name="ir_fps" default="30"/>
+    <arg name="enable_ir" default="true"/>
+    <arg name="flip_ir" default="false"/>
+    
+    <!-- Other configuration -->
+    <arg name="publish_tf" default="true"/>
+    <arg name="tf_publish_rate" default="30.0"/>
+    <arg name="connection_delay" default="100"/>
+    <arg name="depth_scale" default="1"/>
+    
+    <!-- QR code detection configuration -->
+    <arg name="enable_qr_detection" default="false"/>
+    <arg name="qr_code_size" default="0.1"/>
+    
+    <!-- Note: QoS parameters are set directly in the node parameters -->
+    <!-- The qos_profile argument is for reference only in this version -->
+    
+    <!-- Start camera node -->
+    <group>
+        <push-ros-namespace namespace="$(var camera_name)"/>
+        <node name="camera" pkg="astra_camera" exec="astra_camera_node" output="screen">
+            <!-- Basic parameters -->
+            <param name="camera_name" value="$(var camera_name)"/>
+            <param name="depth_registration" value="$(var depth_registration)"/>
+            <param name="serial_number" value="$(var serial_number)"/>
+            <param name="device_num" value="$(var device_num)"/>
+            <param name="vendor_id" value="$(var vendor_id)"/>
+            <param name="product_id" value="$(var product_id)"/>
+            
+            <!-- GPU and point cloud -->
+            <param name="enable_point_cloud" value="$(var enable_point_cloud)"/>
+            <param name="enable_gpu_point_cloud" value="$(var enable_gpu_point_cloud)"/>
+            <param name="enable_colored_point_cloud" value="$(var enable_colored_point_cloud)"/>
+            
+            <!-- Image parameters -->
+            <param name="color_width" value="$(var color_width)"/>
+            <param name="color_height" value="$(var color_height)"/>
+            <param name="color_fps" value="$(var color_fps)"/>
+            <param name="enable_color" value="$(var enable_color)"/>
+            <param name="flip_color" value="$(var flip_color)"/>
+            
+            <param name="depth_width" value="$(var depth_width)"/>
+            <param name="depth_height" value="$(var depth_height)"/>
+            <param name="depth_fps" value="$(var depth_fps)"/>
+            <param name="enable_depth" value="$(var enable_depth)"/>
+            <param name="flip_depth" value="$(var flip_depth)"/>
+            
+            <param name="ir_width" value="$(var ir_width)"/>
+            <param name="ir_height" value="$(var ir_height)"/>
+            <param name="ir_fps" value="$(var ir_fps)"/>
+            <param name="enable_ir" value="$(var enable_ir)"/>
+            <param name="flip_ir" value="$(var flip_ir)"/>
+            
+            <!-- Other parameters -->
+            <param name="publish_tf" value="$(var publish_tf)"/>
+            <param name="tf_publish_rate" value="$(var tf_publish_rate)"/>
+            <param name="connection_delay" value="$(var connection_delay)"/>
+            <param name="depth_scale" value="$(var depth_scale)"/>
+            
+            <!-- QR code detection -->
+            <param name="enable_qr_detection" value="$(var enable_qr_detection)"/>
+            <param name="qr_code_size" value="$(var qr_code_size)"/>
+            
+            <!-- QoS settings -->
+            <param name="color_qos" value="$(var qos_profile)"/>
+            <param name="depth_qos" value="$(var qos_profile)"/>
+            <param name="ir_qos" value="$(var qos_profile)"/>
+            <param name="point_cloud_qos" value="$(var qos_profile)"/>
+            
+            <!-- Remap -->
+            <remap from="/$(var camera_name)/depth/color/points" to="/$(var camera_name)/depth_registered/points"/>
+        </node>
+    </group>
+</launch>

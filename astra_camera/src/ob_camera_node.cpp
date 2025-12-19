@@ -24,7 +24,13 @@ void OBCameraNode::init() {
   run_streaming_poller_ = true;
   poll_stream_thread_ = std::make_shared<std::thread>([this]() { pollFrame(); });
   if (enable_point_cloud_) {
-    point_cloud_processor_ = std::make_unique<PointCloudXyzNode>(node_, parameters_);
+    if (enable_gpu_point_cloud_) {
+      RCLCPP_INFO(logger_, "Using GPU-accelerated point cloud processing");
+      point_cloud_processor_cuda_ = std::make_unique<PointCloudXyzCudaNode>(node_, parameters_);
+    } else {
+      RCLCPP_INFO(logger_, "Using CPU point cloud processing");
+      point_cloud_processor_ = std::make_unique<PointCloudXyzNode>(node_, parameters_);
+    }
   }
   if (enable_colored_point_cloud_) {
     colored_point_cloud_processor_ = std::make_unique<PointCloudXyzrgbNode>(node_, parameters_);
@@ -353,6 +359,7 @@ void OBCameraNode::getParameters() {
   setAndGetNodeParameter(parameters_, depth_roi_.height, "depth_roi_height", -1);
   setAndGetNodeParameter(parameters_, depth_scale_, "depth_scale", 1);
   setAndGetNodeParameter(parameters_, enable_point_cloud_, "enable_point_cloud", true);
+  setAndGetNodeParameter(parameters_, enable_gpu_point_cloud_, "enable_gpu_point_cloud", false);
   setAndGetNodeParameter(parameters_, enable_colored_point_cloud_, "enable_colored_point_cloud",
                          false);
   setAndGetNodeParameter<std::string>(parameters_, point_cloud_qos_, "point_cloud_qos", "default");

@@ -46,6 +46,7 @@
 #include "dynamic_params.h"
 #include "types.h"
 #include "point_cloud_proc/point_cloud_proc.h"
+#include "point_cloud_proc/point_cloud_xyz_cuda.h"
 #include "magic_enum/magic_enum.hpp"
 
 
@@ -261,9 +262,11 @@ class OBCameraNode {
   int depth_scale_ = 1;
   std::string point_cloud_qos_;
   std::unique_ptr<PointCloudXyzNode> point_cloud_processor_ = nullptr;
+  std::unique_ptr<PointCloudXyzCudaNode> point_cloud_processor_cuda_ = nullptr;
   std::unique_ptr<PointCloudXyzrgbNode> colored_point_cloud_processor_ = nullptr;
   bool enable_point_cloud_ = true;
   bool enable_colored_point_cloud_ = false;
+  bool enable_gpu_point_cloud_ = false;
   std::recursive_mutex device_lock_;
   std::unique_ptr<camera_info_manager::CameraInfoManager> ir_info_manager_ = nullptr;
   std::unique_ptr<camera_info_manager::CameraInfoManager> color_info_manager_ = nullptr;

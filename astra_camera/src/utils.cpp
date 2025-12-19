@@ -128,9 +128,27 @@ rmw_qos_profile_t getRMWQosProfileFromString(const std::string& str_qos) {
     return rmw_qos_profile_parameters;
   } else if (upper_str_qos == "SENSOR_DATA") {
     return rmw_qos_profile_sensor_data;
+  } else if (upper_str_qos == "BEST_EFFORT") {
+    // 自定义BEST_EFFORT配置
+    rmw_qos_profile_t profile = rmw_qos_profile_default;
+    profile.reliability = RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT;
+    profile.durability = RMW_QOS_POLICY_DURABILITY_VOLATILE;
+    profile.depth = 5;
+    profile.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
+    return profile;
+  } else if (upper_str_qos == "RELIABLE") {
+    // 自定义RELIABLE配置
+    rmw_qos_profile_t profile = rmw_qos_profile_default;
+    profile.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
+    profile.durability = RMW_QOS_POLICY_DURABILITY_VOLATILE;
+    profile.depth = 10;
+    profile.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
+    return profile;
   } else {
     RCLCPP_ERROR_STREAM(rclcpp::get_logger("astra_camera"),
                         "Invalid QoS profile: " << upper_str_qos << ". Using default QoS profile.");
+    RCLCPP_INFO_STREAM(rclcpp::get_logger("astra_camera"),
+                      "Supported QoS profiles: DEFAULT, SENSOR_DATA, BEST_EFFORT, RELIABLE");
     return rmw_qos_profile_default;
   }
 }
