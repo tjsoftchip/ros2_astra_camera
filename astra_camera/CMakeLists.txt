@@ -35,6 +35,7 @@ find_package(Eigen3 REQUIRED)
 find_package(image_geometry REQUIRED)
 find_package(image_publisher REQUIRED)
 find_package(image_transport REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
@@ -90,6 +91,7 @@ set(dependencies
   image_geometry
   image_publisher
   image_transport
+  nav_msgs
   rclcpp
   rclcpp_components
   rcutils
@@ -110,6 +112,7 @@ add_library(astra_camera_cuda STATIC
   cuda/gpu_memory_pool.cu
   cuda/bilateral_filter.cu
   cuda/image_processor.cu
+  cuda/aruco_preprocessor.cu
   )
 
 target_include_directories(astra_camera_cuda PUBLIC
@@ -119,7 +122,8 @@ target_include_directories(astra_camera_cuda PUBLIC
 
 target_link_libraries(astra_camera_cuda
   CUDA::cudart
-  )
+  CUDA::cublas
+)
 
 set_target_properties(astra_camera_cuda PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
@@ -131,6 +135,7 @@ add_library(${PROJECT_NAME} SHARED
   src/point_cloud_proc/point_cloud_xyzrgb.cpp
   src/point_cloud_proc/point_cloud_xyz_cuda.cpp
   src/cuda/qr_detector_cuda.cpp
+  src/cuda/aruco_detector_simple.cpp
   src/qr_code_detector_node.cpp
   src/ob_context.cpp
   src/dynamic_params.cpp
@@ -269,6 +274,130 @@ install(TARGETS list_devices_node
   ${PROJECT_NAME}_node
   DESTINATION lib/${PROJECT_NAME}/
   )
+
+# QR检测器可执行文件
+add_executable(qr_detector src/qr_detector_main.cpp src/qr_code_detector_node.cpp src/cuda/qr_detector_cuda.cpp)
+
+target_include_directories(qr_detector PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${OpenCV_INCLUDED_DIRS}
+  ${GLOG__INCLUDE_DIRS}
+)
+
+ament_target_dependencies(qr_detector
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  visualization_msgs
+  cv_bridge
+  image_transport
+  message_filters
+  camera_info_manager
+  tf2
+  tf2_eigen
+  tf2_ros
+  std_srvs
+  astra_camera_msgs
+  OpenCV
+)
+
+target_link_libraries(qr_detector
+  ${OpenCV_LIBS}
+  Eigen3::Eigen
+  CUDA::cudart
+  astra_camera_cuda
+  astra_camera
+)
+
+# ArUco检测器可执行文件
+add_executable(aruco_detector src/aruco_detector_main.cpp src/aruco_detector_node.cpp src/cuda/aruco_detector_simple.cpp)
+
+target_include_directories(aruco_detector PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${OpenCV_INCLUDED_DIRS}
+  ${GLOG__INCLUDE_DIRS}
+)
+
+ament_target_dependencies(aruco_detector
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  visualization_msgs
+  cv_bridge
+  image_transport
+  message_filters
+  camera_info_manager
+  tf2
+  tf2_eigen
+  tf2_ros
+  std_srvs
+  astra_camera_msgs
+  OpenCV
+)
+
+target_link_libraries(aruco_detector
+  ${OpenCV_LIBS}
+  Eigen3::Eigen
+  CUDA::cudart
+  astra_camera_cuda
+  astra_camera
+)
+
+# 高精度对齐服务
+add_executable(high_precision_alignment_service src/high_precision_alignment_service.cpp)
+
+target_include_directories(high_precision_alignment_service PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${OpenCV_INCLUDEDIRS}
+)
+
+ament_target_dependencies(high_precision_alignment_service
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  std_srvs
+  cv_bridge
+  OpenCV
+)
+
+target_link_libraries(high_precision_alignment_service
+  ${OpenCV_LIBS}
+)
+
+# 高级功能集成
+add_executable(advanced_aruco_system src/standalone_nodes.cpp)
+
+target_include_directories(advanced_aruco_system PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${OpenCV_INCLUDEDIRS}
+)
+
+ament_target_dependencies(advanced_aruco_system
+  rclcpp
+  rclcpp_components
+  sensor_msgs
+  geometry_msgs
+  nav_msgs
+  visualization_msgs
+  std_msgs
+  cv_bridge
+  OpenCV
+)
+
+target_link_libraries(advanced_aruco_system
+  ${OpenCV_LIBS}
+)
+
+install(TARGETS qr_detector aruco_detector high_precision_alignment_service advanced_aruco_system
+  DESTINATION lib/${PROJECT_NAME}/)
 
 install(
   DIRECTORY include/

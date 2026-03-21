@@ -463,36 +463,16 @@ void OBCameraNode::calcAndPublishStaticTransform() {
   }
 }
 
-void OBCameraNode::publishDynamicTransforms() {
-  RCLCPP_WARN(logger_, "Publishing dynamic camera transforms (/tf) at %g Hz", tf_publish_rate_);
-  static std::mutex mu;
-  std::unique_lock<std::mutex> lock(mu);
-  while (rclcpp::ok() && is_running_) {
-    tf_cv_.wait_for(lock, std::chrono::milliseconds((int)(1000.0 / tf_publish_rate_)),
-                    [this] { return (!(is_running_)); });
-    {
-      rclcpp::Time t = node_->now();
-      for (auto& msg : static_tf_msgs_) {
-        msg.header.stamp = t;
-      }
-      CHECK_NOTNULL(dynamic_tf_broadcaster_);
-      dynamic_tf_broadcaster_->sendTransform(static_tf_msgs_);
-    }
-  }
-}
-
 void OBCameraNode::publishStaticTransforms() {
   if (!publish_tf_) {
     return;
   }
+  // 相机TF是静态变换，始终使用StaticTransformBroadcaster发布
+  // 这样可以避免时间戳不匹配问题
   static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(node_);
-  dynamic_tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
   calcAndPublishStaticTransform();
-  if (tf_publish_rate_ > 0) {
-    tf_thread_ = std::make_shared<std::thread>([this]() { publishDynamicTransforms(); });
-  } else {
-    static_tf_broadcaster_->sendTransform(static_tf_msgs_);
-  }
+  static_tf_broadcaster_->sendTransform(static_tf_msgs_);
+  RCLCPP_INFO(logger_, "Published static camera transforms");
 }
 
 void OBCameraNode::setImageRegistrationMode(bool enable) {

@@ -154,20 +154,10 @@ void PointCloudXyzCudaNode::depthCb(const Image::ConstSharedPtr &depth_msg,
     
     pub_point_cloud_->publish(*cloud_msg);
     
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-    
-    static int frame_count = 0;
-    static auto last_log_time = std::chrono::high_resolution_clock::now();
-    frame_count++;
-    
-    auto time_since_log = std::chrono::duration_cast<std::chrono::seconds>(end_time - last_log_time);
-    if (time_since_log.count() >= 5) {
-      float fps = frame_count / static_cast<float>(time_since_log.count());
-      RCLCPP_INFO(logger_, "CUDA Point Cloud: %.1f Hz, Processing time: %ld ms", 
-                  fps, duration.count());
-      frame_count = 0;
-      last_log_time = end_time;
+    static bool first_publish = true;
+    if (first_publish) {
+      RCLCPP_INFO(logger_, "CUDA Point Cloud node started successfully");
+      first_publish = false;
     }
     
   } catch (const std::exception& e) {
