@@ -37,7 +37,7 @@ ArUcoDetectorCUDA::ArUcoDetectorCUDA(float marker_size)
     parameters_->cornerRefinementWinSize = 3;
     parameters_->cornerRefinementMaxIterations = 30;
     parameters_->cornerRefinementMinAccuracy = 0.01;
-    parameters_->errorCorrectionRate = 0.6;
+    parameters_->errorCorrectionRate = 0.3;   // 降低纠错率以减少误报
     parameters_->detectInvertedMarker = false;
     
     // 创建CUDA流
@@ -193,9 +193,11 @@ bool ArUcoDetectorCUDA::estimatePoseWithDepth(
     center.y /= 4.0f;
     
     distance = getDepthAtPoint(depth_image, center);
-    
-    printf("DEBUG: Center depth = %.3f m\n", distance);
-    
+
+    if (debug_mode_) {
+        printf("DEBUG: Center depth = %.3f m\n", distance);
+    }
+
     // 即使深度无效，也尝试使用纯视觉PnP估计
     bool success = cv::solvePnP(
         object_points,
@@ -206,18 +208,22 @@ bool ArUcoDetectorCUDA::estimatePoseWithDepth(
         tvec,
         false,
         cv::SOLVEPNP_ITERATIVE);
-    
-    printf("DEBUG: solvePnP success = %d\n", success);
-    if (success && !tvec.empty()) {
-        printf("DEBUG: tvec = [%.3f, %.3f, %.3f]\n", 
-               tvec.at<double>(0), tvec.at<double>(1), tvec.at<double>(2));
+
+    if (debug_mode_) {
+        printf("DEBUG: solvePnP success = %d\n", success);
+        if (success && !tvec.empty()) {
+            printf("DEBUG: tvec = [%.3f, %.3f, %.3f]\n",
+                   tvec.at<double>(0), tvec.at<double>(1), tvec.at<double>(2));
+        }
     }
-    
+
     // 如果深度数据无效，使用PnP估计的距离
     if (distance < 0.1f || distance > 5.0f) {
         if (success && !tvec.empty()) {
             distance = tvec.at<double>(2);
-            printf("DEBUG: Using PnP distance = %.3f m\n", distance);
+            if (debug_mode_) {
+                printf("DEBUG: Using PnP distance = %.3f m\n", distance);
+            }
         } else {
             return false;
         }
@@ -265,51 +271,104 @@ bool ArUcoDetectorCUDA::detectAndDecode(
     ArUcoResult& result)
 {
     result.detected = false;
-    
+
     if (rgb_image.empty()) return false;
-    
+
     setCameraParams(camera_matrix, dist_coeffs);
-    
-    // 暂时禁用预处理，使用原始图像
+
+    // 禁用预处理，直接使用原始彩色图像检测（避免自适应阈值产生假角点）
     cv::Mat processed_image = rgb_image.clone();
-    // preprocessImage(rgb_image, processed_image, false, false);
-    
+
     // 检测ArUco标记
     std::vector<int> marker_ids;
     std::vector<std::vector<cv::Point2f>> marker_corners;
-    
-    // 使用旧版API避免OpenCV 4.10.0的bug
+
     cv::aruco::detectMarkers(processed_image, dictionary_, marker_corners, marker_ids, parameters_);
-    
-    // 调试信息
-    if (!marker_ids.empty()) {
-        printf("DEBUG: Detected %zu markers\n", marker_ids.size());
-        for (size_t i = 0; i < marker_ids.size(); i++) {
-            printf("DEBUG: Marker ID %d\n", marker_ids[i]);
-        }
-    }
-    
+
     if (marker_ids.empty()) {
         return false;
     }
-    
-    // 选择最大的标记（假设只有一个标记）
-    int best_idx = 0;
-    float max_area = 0.0f;
-    
-    for (size_t i = 0; i < marker_corners.size(); i++) {
+
+    // ---- 步骤1: 面积过滤 + ID白名单过滤 ----
+    std::vector<int> valid_indices;
+    for (size_t i = 0; i < marker_ids.size(); i++) {
         float area = cv::contourArea(marker_corners[i]);
+
+        // 面积过滤: 小于阈值的直接丢弃
+        if (area < static_cast<float>(min_marker_area_pixels_)) {
+            if (debug_mode_) {
+                printf("DEBUG: Marker ID %d rejected by area filter (%.0f < %d px)\n",
+                       marker_ids[i], area, min_marker_area_pixels_);
+            }
+            continue;
+        }
+
+        // ID白名单过滤: 如果白名单非空，只接受白名单中的ID
+        if (!id_whitelist_.empty()) {
+            bool in_whitelist = false;
+            for (int allowed : id_whitelist_) {
+                if (marker_ids[i] == allowed) {
+                    in_whitelist = true;
+                    break;
+                }
+            }
+            if (!in_whitelist) {
+                if (debug_mode_) {
+                    printf("DEBUG: Marker ID %d rejected by whitelist filter\n", marker_ids[i]);
+                }
+                continue;
+            }
+        }
+
+        valid_indices.push_back(static_cast<int>(i));
+    }
+
+    if (valid_indices.empty()) {
+        return false;
+    }
+
+    // ---- 步骤2: 在有效marker中选择面积最大的 ----
+    int best_idx = valid_indices[0];
+    float max_area = cv::contourArea(marker_corners[best_idx]);
+    for (size_t j = 1; j < valid_indices.size(); j++) {
+        int idx = valid_indices[j];
+        float area = cv::contourArea(marker_corners[idx]);
         if (area > max_area) {
             max_area = area;
-            best_idx = i;
+            best_idx = idx;
         }
     }
-    
+
+    int detected_id = marker_ids[best_idx];
+
+    // ---- 步骤3: 时序一致性过滤 ----
+    // 要求连续 N 帧检测到同一个ID才确认
+    if (detected_id == last_detected_id_) {
+        consecutive_count_++;
+    } else {
+        consecutive_count_ = 1;
+        last_detected_id_ = detected_id;
+    }
+
+    if (consecutive_count_ < required_consecutive_frames_) {
+        if (debug_mode_) {
+            printf("DEBUG: Marker ID %d consecutive_count=%d < %d, holding...\n",
+                   detected_id, consecutive_count_, required_consecutive_frames_);
+        }
+        return false;
+    }
+
+    // 通过所有过滤，确认检测
     result.detected = true;
-    result.marker_id = marker_ids[best_idx];
+    result.marker_id = detected_id;
     result.corners = marker_corners[best_idx];
-    result.data = std::to_string(marker_ids[best_idx]);
-    
+    result.data = std::to_string(detected_id);
+
+    if (debug_mode_) {
+        printf("DEBUG: Marker ID %d CONFIRMED after %d consecutive frames, area=%.0f px\n",
+               detected_id, consecutive_count_, max_area);
+    }
+
     // 姿态估计
     if (!depth_image.empty() && result.corners.size() == 4) {
         estimatePoseWithDepth(
@@ -321,7 +380,7 @@ bool ArUcoDetectorCUDA::detectAndDecode(
             result.angle,
             result.confidence);
     }
-    
+
     return true;
 }
 

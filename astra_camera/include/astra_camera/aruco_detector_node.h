@@ -4,6 +4,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.hpp>
@@ -40,17 +41,21 @@ private:
     std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
     
     rclcpp::Publisher<PoseStamped>::SharedPtr pose_pub_;
+    rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr marker_id_pub_;
     rclcpp::Publisher<Marker>::SharedPtr marker_pub_;
     rclcpp::Publisher<Image>::SharedPtr debug_image_pub_;
     
     std::unique_ptr<cuda::ArUcoDetectorCUDA> aruco_detector_;
-    
+
     float marker_size_;
     bool enable_debug_image_;
     bool enable_visualization_;
     bool enable_preprocessing_;
     int dictionary_id_;
-    
+    std::vector<int> id_whitelist_;
+    int min_consecutive_frames_;
+    int min_marker_area_pixels_;
+
     void imageCb(
         const Image::ConstSharedPtr& rgb_msg,
         const Image::ConstSharedPtr& depth_msg,

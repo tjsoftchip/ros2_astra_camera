@@ -203,9 +203,20 @@ void UVCCameraDriver::startStreaming() {
   uvc_error_t stream_err =
       uvc_start_streaming(device_handle_, &ctrl_, &UVCCameraDriver::frameCallbackWrapper, this, 0);
   if (stream_err != UVC_SUCCESS) {
+    // When uvc_open() has already claimed the streaming USB interface,
+    // uvc_start_streaming() fails with "attempt to claim already-claimed
+    // interface". A stop/restart cycle resets the USB interface state.
+    RCLCPP_WARN_STREAM(logger_, "uvc start streaming error: " << uvc_strerror(stream_err)
+                                                               << " - trying stop/restart cycle");
+    uvc_stop_streaming(device_handle_);
+    usleep(100000);  // 100ms
+    stream_err =
+        uvc_start_streaming(device_handle_, &ctrl_, &UVCCameraDriver::frameCallbackWrapper, this, 0);
+  }
+  if (stream_err != UVC_SUCCESS) {
     RCLCPP_ERROR_STREAM(logger_, "uvc start streaming error " << uvc_strerror(stream_err)
-                                                              << " retry " << config_.retry_count
-                                                              << " times");
+                                                               << " retry " << config_.retry_count
+                                                               << " times");
     for (int i = 0; i < config_.retry_count; i++) {
       stream_err = uvc_start_streaming(device_handle_, &ctrl_,
                                        &UVCCameraDriver::frameCallbackWrapper, this, 0);

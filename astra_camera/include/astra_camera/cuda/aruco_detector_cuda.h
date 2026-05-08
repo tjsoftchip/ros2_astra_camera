@@ -40,6 +40,9 @@ public:
     void setMarkerSize(float size) { marker_size_ = size; }
     void setDictionary(int dict_id);
     void setDebugMode(bool enable) { debug_mode_ = enable; }
+    void setIdWhitelist(const std::vector<int>& whitelist) { id_whitelist_ = whitelist; }
+    void setRequiredConsecutiveFrames(int frames) { required_consecutive_frames_ = frames; }
+    void setMinMarkerAreaPixels(int area) { min_marker_area_pixels_ = area; }
     
     // GPU预处理功能
     void preprocessImage(
@@ -58,7 +61,14 @@ private:
     
     bool debug_mode_;
     int dictionary_id_;
-    
+
+    // 误报过滤参数
+    std::vector<int> id_whitelist_;           // ID白名单，空表示接受所有
+    int required_consecutive_frames_ = 3;     // 需要连续检测到的帧数
+    int consecutive_count_ = 0;               // 当前连续计数
+    int last_detected_id_ = -1;               // 上一帧检测到的ID
+    int min_marker_area_pixels_ = 100;        // 最小marker面积（像素）
+
     // GPU内存管理
     uint8_t* d_input_;
     uint8_t* d_output_;

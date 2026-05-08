@@ -1,6 +1,7 @@
 #include "astra_camera/aruco_detector_node.h"
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
+#include <cmath>
 #include <opencv2/opencv.hpp>
 
 namespace astra_camera {
@@ -9,23 +10,54 @@ ArUcoDetectorNode::ArUcoDetectorNode(rclcpp::Node* node, std::shared_ptr<Paramet
     : node_(node),
       parameters_(std::move(parameters)),
       logger_(node->get_logger()),
-      marker_size_(0.1685f),
+      marker_size_(0.57f),
       enable_debug_image_(true),
       enable_visualization_(true),
       enable_preprocessing_(true),
-      dictionary_id_(10) // DICT_6X6_250 = 10
+      dictionary_id_(0) // DICT_4X4_50 = 0
 {
     // 启用参数设置
-    setAndGetNodeParameter(parameters_, marker_size_, "aruco_marker_size", 0.1685f);
+    setAndGetNodeParameter(parameters_, marker_size_, "aruco_marker_size", 0.57f);
     setAndGetNodeParameter(parameters_, enable_debug_image_, "enable_aruco_debug_image", true);
     setAndGetNodeParameter(parameters_, enable_visualization_, "enable_aruco_visualization", true);
-    setAndGetNodeParameter(parameters_, enable_preprocessing_, "enable_aruco_preprocessing", true);
-    setAndGetNodeParameter(parameters_, dictionary_id_, "aruco_dictionary_id", 10);
-    
+    setAndGetNodeParameter(parameters_, enable_preprocessing_, "enable_aruco_preprocessing", false);
+    setAndGetNodeParameter(parameters_, dictionary_id_, "aruco_dictionary_id", 0);
+
+    // 新增误报过滤参数 (白名单默认只接受 ID=0 和 ID=1)
+    std::vector<int64_t> whitelist_default = {0, 1};
+    setAndGetNodeParameter(parameters_, whitelist_default, "aruco_id_whitelist", whitelist_default);
+    for (auto v : whitelist_default) id_whitelist_.push_back(static_cast<int>(v));
+
+    setAndGetNodeParameter(parameters_, min_consecutive_frames_, "aruco_min_consecutive_frames", 3);
+    setAndGetNodeParameter(parameters_, min_marker_area_pixels_, "aruco_min_marker_area_pixels", 100);
+
     aruco_detector_ = std::make_unique<cuda::ArUcoDetectorCUDA>(marker_size_);
     aruco_detector_->setDictionary(dictionary_id_);
     aruco_detector_->setDebugMode(enable_debug_image_);
-    
+    aruco_detector_->setIdWhitelist(id_whitelist_);
+    aruco_detector_->setRequiredConsecutiveFrames(min_consecutive_frames_);
+    aruco_detector_->setMinMarkerAreaPixels(min_marker_area_pixels_);
+
+    // 通过 Parameters 系统注册动态参数回调（消除 "can not be changed in runtime" 警告）
+    parameters_->setParam("aruco_dictionary_id", rclcpp::ParameterValue(dictionary_id_),
+        [this](const rclcpp::Parameter &p) {
+            int new_id = p.as_int();
+            if (new_id != dictionary_id_) {
+                aruco_detector_->setDictionary(new_id);
+                dictionary_id_ = new_id;
+                RCLCPP_INFO(logger_, "Dictionary switched to %d", new_id);
+            }
+        });
+    parameters_->setParam("aruco_marker_size", rclcpp::ParameterValue(static_cast<double>(marker_size_)),
+        [this](const rclcpp::Parameter &p) {
+            float new_size = static_cast<float>(p.as_double());
+            if (std::fabs(new_size - marker_size_) > 0.001f) {
+                marker_size_ = new_size;
+                aruco_detector_->setMarkerSize(new_size);
+                RCLCPP_INFO(logger_, "Marker size changed to %.3f m", marker_size_);
+            }
+        });
+
     RCLCPP_INFO(logger_, "Creating subscribers...");
     rgb_sub_ = std::make_shared<message_filters::Subscriber<Image>>(
         node_, "camera/color/image_raw", rmw_qos_profile_sensor_data);
@@ -44,10 +76,22 @@ ArUcoDetectorNode::ArUcoDetectorNode(rclcpp::Node* node, std::shared_ptr<Paramet
     RCLCPP_INFO(logger_, "Synchronizer created and callback registered");
     
     pose_pub_ = node_->create_publisher<PoseStamped>("qr_code/pose", 10);
+    marker_id_pub_ = node_->create_publisher<std_msgs::msg::Int32>("qr_code/marker_id", 10);
     marker_pub_ = node_->create_publisher<Marker>("qr_code/marker", 10);
     debug_image_pub_ = node_->create_publisher<Image>("qr_code/debug_image", 10);
     
-    RCLCPP_INFO(logger_, "ArUco Detector Node initialized (Marker size: %.3f m, Dictionary: 6x6_250)", marker_size_);
+    RCLCPP_INFO(logger_, "ArUco Detector Node initialized (Marker size: %.3f m, Dictionary: %d)", marker_size_, dictionary_id_);
+    RCLCPP_INFO(logger_, "  - Anti-false-positive filters:");
+    RCLCPP_INFO(logger_, "    errorCorrectionRate: 0.3 (reduced)");
+    RCLCPP_INFO(logger_, "    min_consecutive_frames: %d", min_consecutive_frames_);
+    RCLCPP_INFO(logger_, "    min_marker_area: %d px", min_marker_area_pixels_);
+    if (!id_whitelist_.empty()) {
+        std::string ids;
+        for (int id : id_whitelist_) ids += std::to_string(id) + " ";
+        RCLCPP_INFO(logger_, "    id_whitelist: %s", ids.c_str());
+    } else {
+        RCLCPP_INFO(logger_, "    id_whitelist: ALL (disabled)");
+    }
 }
 
 ArUcoDetectorNode::~ArUcoDetectorNode() {
@@ -61,7 +105,7 @@ void ArUcoDetectorNode::imageCb(
     static int count = 0;
     count++;
     
-    if (count % 10 == 0) {
+    if (count % 3000 == 0) {
         RCLCPP_INFO(logger_, "Image callback called %d times", count);
     }
     
@@ -94,7 +138,12 @@ void ArUcoDetectorNode::imageCb(
             result);
         
         if (detected) {
-            RCLCPP_INFO(logger_, "ArUco marker detected: ID=%d, Distance=%.3f m, Angle=%.1f deg, Confidence=%.2f",
+            // 发布 marker ID
+            auto id_msg = std::make_unique<std_msgs::msg::Int32>();
+            id_msg->data = result.marker_id;
+            marker_id_pub_->publish(std::move(id_msg));
+
+            RCLCPP_DEBUG(logger_, "ArUco marker detected: ID=%d, Distance=%.3f m, Angle=%.1f deg, Confidence=%.2f",
                        result.marker_id, result.distance, result.angle, result.confidence);
             
             publishPose(result, rgb_msg->header);
@@ -107,8 +156,8 @@ void ArUcoDetectorNode::imageCb(
                 publishDebugImage(rgb_ptr->image, result, rgb_msg->header);
             }
         } else {
-            if (count % 30 == 0) {
-                RCLCPP_INFO(logger_, "No ArUco marker detected (callback %d)", count);
+            if (count % 3000 == 0) {
+                RCLCPP_DEBUG(logger_, "No ArUco marker detected (callback %d)", count);
             }
         }
         
