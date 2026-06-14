@@ -93,11 +93,12 @@ bool ArUcoDetectorCUDA::estimatePoseWithDepth(
     
     distance = getDepthAtPoint(depth_image, center);
     
-    if (distance < 0.1f || distance > 5.0f) {
-        return false;
-    }
+    // 深度仅用于置信度打分，不用作PnP的gate:
+    // 1) Astra深度相机在>5m时数据不可靠，但PnP(基于RGB角点)在9m内仍有效
+    // 2) 去掉硬阈值后PnP正常求解，深度一致性由下面的confidence公式自动降权
+    // 3) 下游aruco_pose_estimator的max_valid_distance=9.0m做最终距离过滤
     
-    // 使用深度信息约束PnP求解
+    // 使用PnP求解位姿（不依赖深度）
     bool success = cv::solvePnP(
         object_points,
         corners,

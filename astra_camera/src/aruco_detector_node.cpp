@@ -14,7 +14,9 @@ ArUcoDetectorNode::ArUcoDetectorNode(rclcpp::Node* node, std::shared_ptr<Paramet
       enable_debug_image_(true),
       enable_visualization_(true),
       enable_preprocessing_(true),
-      dictionary_id_(0) // DICT_4X4_50 = 0
+      dictionary_id_(0), // DICT_4X4_50 = 0
+      frame_counter_(0),
+      process_every_n_frames_(5)
 {
     // 启用参数设置
     setAndGetNodeParameter(parameters_, marker_size_, "aruco_marker_size", 0.57f);
@@ -30,6 +32,7 @@ ArUcoDetectorNode::ArUcoDetectorNode(rclcpp::Node* node, std::shared_ptr<Paramet
 
     setAndGetNodeParameter(parameters_, min_consecutive_frames_, "aruco_min_consecutive_frames", 3);
     setAndGetNodeParameter(parameters_, min_marker_area_pixels_, "aruco_min_marker_area_pixels", 100);
+    setAndGetNodeParameter(parameters_, process_every_n_frames_, "aruco_process_every_n_frames", 5);
 
     aruco_detector_ = std::make_unique<cuda::ArUcoDetectorCUDA>(marker_size_);
     aruco_detector_->setDictionary(dictionary_id_);
@@ -61,18 +64,18 @@ ArUcoDetectorNode::ArUcoDetectorNode(rclcpp::Node* node, std::shared_ptr<Paramet
     RCLCPP_INFO(logger_, "Creating subscribers...");
     rgb_sub_ = std::make_shared<message_filters::Subscriber<Image>>(
         node_, "camera/color/image_raw", rmw_qos_profile_sensor_data);
-    depth_sub_ = std::make_shared<message_filters::Subscriber<Image>>(
-        node_, "camera/depth/image_raw", rmw_qos_profile_sensor_data);
     camera_info_sub_ = std::make_shared<message_filters::Subscriber<CameraInfo>>(
         node_, "camera/color/camera_info", rmw_qos_profile_sensor_data);
+    depth_sub_ = node_->create_subscription<Image>(
+        "camera/depth/image_raw", rclcpp::SensorDataQoS(),
+        std::bind(&ArUcoDetectorNode::depthCb, this, std::placeholders::_1));
     RCLCPP_INFO(logger_, "Subscribers created");
     
     sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(
-        SyncPolicy(10), *rgb_sub_, *depth_sub_, *camera_info_sub_);
+        SyncPolicy(10), *rgb_sub_, *camera_info_sub_);
     sync_->registerCallback(std::bind(&ArUcoDetectorNode::imageCb, this,
                                      std::placeholders::_1,
-                                     std::placeholders::_2,
-                                     std::placeholders::_3));
+                                     std::placeholders::_2));
     RCLCPP_INFO(logger_, "Synchronizer created and callback registered");
     
     pose_pub_ = node_->create_publisher<PoseStamped>("qr_code/pose", 10);
@@ -81,6 +84,7 @@ ArUcoDetectorNode::ArUcoDetectorNode(rclcpp::Node* node, std::shared_ptr<Paramet
     debug_image_pub_ = node_->create_publisher<Image>("qr_code/debug_image", 10);
     
     RCLCPP_INFO(logger_, "ArUco Detector Node initialized (Marker size: %.3f m, Dictionary: %d)", marker_size_, dictionary_id_);
+    RCLCPP_INFO(logger_, "  - Frame skip: every %d frame (%.1f fps → %.1f fps)", process_every_n_frames_, 30.0f, 30.0f / process_every_n_frames_);
     RCLCPP_INFO(logger_, "  - Anti-false-positive filters:");
     RCLCPP_INFO(logger_, "    errorCorrectionRate: 0.3 (reduced)");
     RCLCPP_INFO(logger_, "    min_consecutive_frames: %d", min_consecutive_frames_);
@@ -97,21 +101,38 @@ ArUcoDetectorNode::ArUcoDetectorNode(rclcpp::Node* node, std::shared_ptr<Paramet
 ArUcoDetectorNode::~ArUcoDetectorNode() {
 }
 
+void ArUcoDetectorNode::depthCb(const Image::ConstSharedPtr& depth_msg)
+{
+    try {
+        cv_bridge::CvImageConstPtr depth_ptr = cv_bridge::toCvShare(depth_msg, "16UC1");
+        std::lock_guard<std::mutex> lock(depth_mutex_);
+        latest_depth_ = depth_ptr->image.clone();
+    } catch (const cv_bridge::Exception& e) {
+        RCLCPP_ERROR(logger_, "cv_bridge exception in depthCb: %s", e.what());
+    }
+}
+
 void ArUcoDetectorNode::imageCb(
     const Image::ConstSharedPtr& rgb_msg,
-    const Image::ConstSharedPtr& depth_msg,
     const CameraInfo::ConstSharedPtr& camera_info_msg)
 {
     static int count = 0;
     count++;
+    frame_counter_++;
     
     if (count % 3000 == 0) {
         RCLCPP_INFO(logger_, "Image callback called %d times", count);
     }
     
+    // 跳帧处理: 仅每 process_every_n_frames_ 帧执行一次检测（默认5，约6fps）
+    // 视觉伺服控制频率通常为10-20Hz，6fps完全满足对齐精度要求
+    // 可大幅降低CPU占用（79.6% → ~16%）
+    if (frame_counter_ % process_every_n_frames_ != 0) {
+        return;
+    }
+    
     try {
         cv_bridge::CvImageConstPtr rgb_ptr = cv_bridge::toCvShare(rgb_msg, "bgr8");
-        cv_bridge::CvImageConstPtr depth_ptr = cv_bridge::toCvShare(depth_msg, "16UC1");
         
         cv::Mat camera_matrix = cv::Mat(3, 3, CV_64F);
         camera_matrix.at<double>(0, 0) = camera_info_msg->k[0];
@@ -129,10 +150,16 @@ void ArUcoDetectorNode::imageCb(
             dist_coeffs.at<double>(i, 0) = camera_info_msg->d[i];
         }
         
+        cv::Mat depth_for_detection;
+        {
+            std::lock_guard<std::mutex> lock(depth_mutex_);
+            depth_for_detection = latest_depth_.clone();
+        }
+        
         cuda::ArUcoResult result;
         bool detected = aruco_detector_->detectAndDecode(
             rgb_ptr->image,
-            depth_ptr->image,
+            depth_for_detection,
             camera_matrix,
             dist_coeffs,
             result);

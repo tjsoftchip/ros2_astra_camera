@@ -29,16 +29,19 @@ private:
     using PoseStamped = geometry_msgs::msg::PoseStamped;
     using Marker = visualization_msgs::msg::Marker;
     
-    using SyncPolicy = message_filters::sync_policies::ApproximateTime<Image, Image, CameraInfo>;
+    using SyncPolicy = message_filters::sync_policies::ApproximateTime<Image, CameraInfo>;
     
     rclcpp::Node* node_;
     std::shared_ptr<Parameters> parameters_;
     rclcpp::Logger logger_;
     
     std::shared_ptr<message_filters::Subscriber<Image>> rgb_sub_;
-    std::shared_ptr<message_filters::Subscriber<Image>> depth_sub_;
     std::shared_ptr<message_filters::Subscriber<CameraInfo>> camera_info_sub_;
     std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
+    
+    rclcpp::Subscription<Image>::SharedPtr depth_sub_;
+    cv::Mat latest_depth_;
+    std::mutex depth_mutex_;
     
     rclcpp::Publisher<PoseStamped>::SharedPtr pose_pub_;
     rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr marker_id_pub_;
@@ -55,11 +58,14 @@ private:
     std::vector<int> id_whitelist_;
     int min_consecutive_frames_;
     int min_marker_area_pixels_;
+    int frame_counter_;
+    int process_every_n_frames_;
 
     void imageCb(
         const Image::ConstSharedPtr& rgb_msg,
-        const Image::ConstSharedPtr& depth_msg,
         const CameraInfo::ConstSharedPtr& camera_info_msg);
+    
+    void depthCb(const Image::ConstSharedPtr& depth_msg);
     
     void publishPose(const cuda::ArUcoResult& result, const std_msgs::msg::Header& header);
     void publishMarker(const cuda::ArUcoResult& result, const std_msgs::msg::Header& header);
